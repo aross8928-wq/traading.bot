@@ -150,7 +150,9 @@ def home():
     </thead>
     <tbody id="table"></tbody>
     </table>
-
+    <th>Score</th>
+    <th>Prob%</th>
+    <th>Re-entry</th>
     <h3>Logs</h3>
     <div id="logs"></div>
 
@@ -166,6 +168,9 @@ def home():
 
             html+=`
             <tr>
+            <td>${c.score}</td>
+            <td>${c.prob}%</td>
+            <td>${c.zone}</td>
             <td>${c.symbol}</td>
             <td>${c.price}</td>
             <td>${c.trend}</td>
