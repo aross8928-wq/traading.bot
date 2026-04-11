@@ -3,141 +3,133 @@ import threading, time, requests, pandas as pd, os
 
 app = Flask(__name__)
 
-# ================= CONFIG =================
 SYMBOLS = [
     "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
     "XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT",
     "MATICUSDT","LINKUSDT"
 ]
 
-state = {
-    "coins": [],
-    "logs": []
-}
+state = {"coins":[],"logs":[]}
 
-# ================= CORE =================
 def log(msg):
     print(msg)
     state["logs"].insert(0, msg)
-    state["logs"] = state["logs"][:50]
+    state["logs"]=state["logs"][:50]
 
 def get_klines(symbol, interval):
     try:
-        r = requests.get("https://api.binance.com/api/v3/klines",
-                         params={"symbol":symbol,"interval":interval,"limit":200}, timeout=10)
-        df = pd.DataFrame(r.json())
-        df = df[[1,2,3,4]]
-        df.columns = ["open","high","low","close"]
+        r=requests.get("https://api.binance.com/api/v3/klines",
+        params={"symbol":symbol,"interval":interval,"limit":200},timeout=10)
+        df=pd.DataFrame(r.json())
+        df=df[[1,2,3,4]]
+        df.columns=["open","high","low","close"]
         return df.astype(float)
     except:
         return None
 
 def analyze(symbol):
 
-    df1h = get_klines(symbol,"1h")
-    df4h = get_klines(symbol,"4h")
+    df1h=get_klines(symbol,"1h")
+    df4h=get_klines(symbol,"4h")
 
     if df1h is None or df4h is None:
         return None
 
-    df1h["ema50"] = df1h["close"].ewm(span=50).mean()
-    df4h["ema50"] = df4h["close"].ewm(span=50).mean()
-    df4h["ema200"] = df4h["close"].ewm(span=200).mean()
+    df1h["ema50"]=df1h["close"].ewm(span=50).mean()
+    df4h["ema50"]=df4h["close"].ewm(span=50).mean()
+    df4h["ema200"]=df4h["close"].ewm(span=200).mean()
 
-    df1h["high_roll"] = df1h["high"].rolling(20).max()
-    df1h["atr"] = (df1h["high"]-df1h["low"]).rolling(14).mean()
+    df1h["high_roll"]=df1h["high"].rolling(20).max()
+    df1h["atr"]=(df1h["high"]-df1h["low"]).rolling(14).mean()
 
-    row1 = df1h.iloc[-1]
-    row4 = df4h.iloc[-1]
+    row1=df1h.iloc[-1]
+    row4=df4h.iloc[-1]
 
-    price = row1["close"]
+    price=row1["close"]
+    trend="BULL" if row4["ema50"]>row4["ema200"] else "BEAR"
 
-    # TREND
-    trend = "BULL" if row4["ema50"] > row4["ema200"] else "BEAR"
+    prev_high=df1h["high_roll"].iloc[-2]
 
-    # BREAKOUT
-    prev_high = df1h["high_roll"].iloc[-2]
+    signal="WAIT"
+    reason="No breakout"
+    entry="-"; stop="-"; tp="-"; order="-"
 
-    signal = "WAIT"
-    entry = "-"
-    stop = "-"
-    tp = "-"
+    if trend=="BULL":
 
-    if trend == "BULL":
+        if (price-row1["ema50"])<row1["atr"]*1.2:
 
-        if (price - row1["ema50"]) < row1["atr"] * 1.2:
+            if price>prev_high:
 
-            if price > prev_high:
+                signal="BUY"
+                reason="Breakout + trend aligned"
 
-                signal = "BUY"
-                entry = round(price,2)
-                stop = round(price - row1["atr"],2)
-                tp = round(price + (price - (price - row1["atr"])) * 2,2)
+                entry=round(price,2)
+                stop=round(price-row1["atr"],2)
+                tp=round(price+(price-stop)*2,2)
+
+                order="OCO"
 
             else:
-                signal = "WAIT"
+                signal="WAIT"
+                reason="Waiting breakout"
 
         else:
-            signal = "OVEREXTENDED"
+            signal="LATE"
+            reason="Overextended move"
 
     else:
-        signal = "NO TRADE"
+        signal="NO TRADE"
+        reason="Bear trend"
 
     return {
-        "symbol": symbol,
-        "price": round(price,2),
-        "trend": trend,
-        "signal": signal,
-        "entry": entry,
-        "stop": stop,
-        "tp": tp
+        "symbol":symbol,
+        "price":round(price,2),
+        "trend":trend,
+        "signal":signal,
+        "reason":reason,
+        "entry":entry,
+        "stop":stop,
+        "tp":tp,
+        "order":order,
+        "chart":df1h["close"].tail(50).tolist()
     }
 
-# ================= BOT LOOP =================
 def run_bot():
     while True:
-        coins = []
+        coins=[]
+        for s in SYMBOLS:
+            data=analyze(s)
+            if data: coins.append(data)
 
-        for sym in SYMBOLS:
-            data = analyze(sym)
-            if data:
-                coins.append(data)
-
-        state["coins"] = coins
-
-        log("Market scanned")
-
+        state["coins"]=coins
+        log("Scan complete")
         time.sleep(15)
 
-# ================= WEB =================
 @app.route("/")
 def home():
     return """
     <html>
     <head>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
     body { background:#111;color:#eee;font-family:Arial;padding:20px }
     table { width:100%; border-collapse:collapse }
-    td,th { padding:10px; border-bottom:1px solid #333 }
-    .buy { color:#0f0 }
-    .wait { color:#ff0 }
-    .no { color:#f00 }
+    td,th { padding:8px; border-bottom:1px solid #333 }
+    .buy{color:#0f0} .wait{color:#ff0} .no{color:#f00}
+    canvas{max-width:400px}
     </style>
     </head>
     <body>
 
-    <h1>📊 Trading Dashboard</h1>
+    <h1>📊 PRO Trading Dashboard</h1>
 
     <table>
     <thead>
     <tr>
-    <th>Symbol</th>
-    <th>Price</th>
-    <th>Trend</th>
-    <th>Signal</th>
-    <th>Entry</th>
-    <th>Stop</th>
-    <th>TP</th>
+    <th>Coin</th><th>Price</th><th>Trend</th>
+    <th>Signal</th><th>Reason</th>
+    <th>Entry</th><th>SL</th><th>TP</th><th>Order</th>
+    <th>Chart</th>
     </tr>
     </thead>
     <tbody id="table"></tbody>
@@ -148,36 +140,44 @@ def home():
 
     <script>
     async function load(){
-        let r = await fetch('/data');
-        let d = await r.json();
+        let r=await fetch('/data'); let d=await r.json();
+        let html="";
 
-        let html = "";
+        d.coins.forEach(c=>{
+            let cls="wait";
+            if(c.signal=="BUY")cls="buy";
+            if(c.signal=="NO TRADE")cls="no";
 
-        d.coins.forEach(c => {
-
-            let cls = "wait";
-            if(c.signal=="BUY") cls="buy";
-            if(c.signal=="NO TRADE") cls="no";
-
-            html += `
+            html+=`
             <tr>
-                <td>${c.symbol}</td>
-                <td>${c.price}</td>
-                <td>${c.trend}</td>
-                <td class="${cls}">${c.signal}</td>
-                <td>${c.entry}</td>
-                <td>${c.stop}</td>
-                <td>${c.tp}</td>
+            <td>${c.symbol}</td>
+            <td>${c.price}</td>
+            <td>${c.trend}</td>
+            <td class="${cls}">${c.signal}</td>
+            <td>${c.reason}</td>
+            <td>${c.entry}</td>
+            <td>${c.stop}</td>
+            <td>${c.tp}</td>
+            <td>${c.order}</td>
+            <td><canvas id="${c.symbol}"></canvas></td>
             </tr>`;
         });
 
-        document.getElementById("table").innerHTML = html;
+        document.getElementById("table").innerHTML=html;
 
-        document.getElementById("logs").innerHTML =
-            d.logs.map(x=>"<div>"+x+"</div>").join("");
+        d.coins.forEach(c=>{
+            new Chart(document.getElementById(c.symbol),{
+                type:'line',
+                data:{labels:c.chart, datasets:[{data:c.chart, borderColor:'#0f0'}]},
+                options:{plugins:{legend:{display:false}},scales:{x:{display:false}}}
+            });
+        });
+
+        document.getElementById("logs").innerHTML=
+        d.logs.map(x=>"<div>"+x+"</div>").join("");
     }
 
-    setInterval(load,2000);
+    setInterval(load,3000);
     </script>
 
     </body>
@@ -188,7 +188,5 @@ def home():
 def data():
     return jsonify(state)
 
-# ================= START =================
-threading.Thread(target=run_bot, daemon=True).start()
-
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+threading.Thread(target=run_bot,daemon=True).start()
+app.run(host="0.0.0.0",port=int(os.environ.get("PORT",3000)))
