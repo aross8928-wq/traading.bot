@@ -1,21 +1,21 @@
 from flask import Flask, jsonify
-import threading, time, requests, pandas as pd
+import threading, time, requests, pandas as pd, os
 
 app = Flask(__name__)
 
-# CONFIG
-SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT"]
-BALANCE = 5000
-RISK = 0.0075
-MAX_POS = 3
-RR = 2
+# ================= CONFIG =================
+SYMBOLS = [
+    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
+    "XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT",
+    "MATICUSDT","LINKUSDT"
+]
 
 state = {
-    "balance": BALANCE,
-    "positions": [],
+    "coins": [],
     "logs": []
 }
 
+# ================= CORE =================
 def log(msg):
     print(msg)
     state["logs"].insert(0, msg)
@@ -32,79 +32,84 @@ def get_klines(symbol, interval):
     except:
         return None
 
-def ema(series, n):
-    return series.ewm(span=n).mean()
+def analyze(symbol):
 
+    df1h = get_klines(symbol,"1h")
+    df4h = get_klines(symbol,"4h")
+
+    if df1h is None or df4h is None:
+        return None
+
+    df1h["ema50"] = df1h["close"].ewm(span=50).mean()
+    df4h["ema50"] = df4h["close"].ewm(span=50).mean()
+    df4h["ema200"] = df4h["close"].ewm(span=200).mean()
+
+    df1h["high_roll"] = df1h["high"].rolling(20).max()
+    df1h["atr"] = (df1h["high"]-df1h["low"]).rolling(14).mean()
+
+    row1 = df1h.iloc[-1]
+    row4 = df4h.iloc[-1]
+
+    price = row1["close"]
+
+    # TREND
+    trend = "BULL" if row4["ema50"] > row4["ema200"] else "BEAR"
+
+    # BREAKOUT
+    prev_high = df1h["high_roll"].iloc[-2]
+
+    signal = "WAIT"
+    entry = "-"
+    stop = "-"
+    tp = "-"
+
+    if trend == "BULL":
+
+        if (price - row1["ema50"]) < row1["atr"] * 1.2:
+
+            if price > prev_high:
+
+                signal = "BUY"
+                entry = round(price,2)
+                stop = round(price - row1["atr"],2)
+                tp = round(price + (price - (price - row1["atr"])) * 2,2)
+
+            else:
+                signal = "WAIT"
+
+        else:
+            signal = "OVEREXTENDED"
+
+    else:
+        signal = "NO TRADE"
+
+    return {
+        "symbol": symbol,
+        "price": round(price,2),
+        "trend": trend,
+        "signal": signal,
+        "entry": entry,
+        "stop": stop,
+        "tp": tp
+    }
+
+# ================= BOT LOOP =================
 def run_bot():
     while True:
-        prices = {}
+        coins = []
 
         for sym in SYMBOLS:
-            df1h = get_klines(sym,"1h")
-            df4h = get_klines(sym,"4h")
+            data = analyze(sym)
+            if data:
+                coins.append(data)
 
-            if df1h is None or df4h is None:
-                continue
+        state["coins"] = coins
 
-            df1h["ema50"] = ema(df1h["close"],50)
-            df4h["ema50"] = ema(df4h["close"],50)
-            df4h["ema200"] = ema(df4h["close"],200)
+        log("Market scanned")
 
-            df1h["high_roll"] = df1h["high"].rolling(20).max()
-            df1h["atr"] = (df1h["high"]-df1h["low"]).rolling(14).mean()
+        time.sleep(15)
 
-            row1 = df1h.iloc[-1]
-            row4 = df4h.iloc[-1]
-
-            price = row1["close"]
-            prices[sym] = price
-
-            if not (row4["ema50"] > row4["ema200"] and price > row4["ema50"]):
-                continue
-
-            prev_high = df1h["high_roll"].iloc[-2]
-
-            if (price - row1["ema50"]) > row1["atr"] * 1.2:
-                continue
-
-            if price > prev_high and len(state["positions"]) < MAX_POS:
-
-                entry = price
-                stop = price - row1["atr"]
-                tp = entry + (entry-stop)*RR
-
-                risk_amt = state["balance"] * RISK
-                size = risk_amt/(entry-stop) if entry>stop else 0
-
-                if size <= 0:
-                    continue
-
-                state["positions"].append({
-                    "symbol": sym,
-                    "entry": entry,
-                    "stop": stop,
-                    "tp": tp,
-                    "size": size
-                })
-
-                log(f"🚀 OPEN {sym} @ {round(entry,2)}")
-
-        closed = []
-        for p in state["positions"]:
-            price = prices.get(p["symbol"], p["entry"])
-
-            if price <= p["stop"] or price >= p["tp"]:
-                pnl = (price - p["entry"]) * p["size"]
-                state["balance"] += pnl
-                log(f"❌ CLOSE {p['symbol']} PnL {round(pnl,2)}")
-                closed.append(p)
-
-        for c in closed:
-            state["positions"].remove(c)
-
-        time.sleep(10)
-
-
+# ================= WEB =================
 @app.route("/")
 def home():
     return """
@@ -112,36 +117,67 @@ def home():
     <head>
     <style>
     body { background:#111;color:#eee;font-family:Arial;padding:20px }
-    .card {border:1px solid #333;padding:15px;margin:10px}
+    table { width:100%; border-collapse:collapse }
+    td,th { padding:10px; border-bottom:1px solid #333 }
+    .buy { color:#0f0 }
+    .wait { color:#ff0 }
+    .no { color:#f00 }
     </style>
     </head>
     <body>
 
-    <h1>📊 Trading Bot</h1>
+    <h1>📊 Trading Dashboard</h1>
 
-    <div class="card">
-    Balance: <span id="balance"></span><br>
-    Positions: <span id="pos"></span>
-    </div>
+    <table>
+    <thead>
+    <tr>
+    <th>Symbol</th>
+    <th>Price</th>
+    <th>Trend</th>
+    <th>Signal</th>
+    <th>Entry</th>
+    <th>Stop</th>
+    <th>TP</th>
+    </tr>
+    </thead>
+    <tbody id="table"></tbody>
+    </table>
 
-    <div class="card">
     <h3>Logs</h3>
     <div id="logs"></div>
-    </div>
 
     <script>
-    async function update(){
+    async function load(){
         let r = await fetch('/data');
         let d = await r.json();
 
-        document.getElementById('balance').innerText = d.balance.toFixed(2);
-        document.getElementById('pos').innerText = d.positions.length;
+        let html = "";
 
-        document.getElementById('logs').innerHTML =
+        d.coins.forEach(c => {
+
+            let cls = "wait";
+            if(c.signal=="BUY") cls="buy";
+            if(c.signal=="NO TRADE") cls="no";
+
+            html += `
+            <tr>
+                <td>${c.symbol}</td>
+                <td>${c.price}</td>
+                <td>${c.trend}</td>
+                <td class="${cls}">${c.signal}</td>
+                <td>${c.entry}</td>
+                <td>${c.stop}</td>
+                <td>${c.tp}</td>
+            </tr>`;
+        });
+
+        document.getElementById("table").innerHTML = html;
+
+        document.getElementById("logs").innerHTML =
             d.logs.map(x=>"<div>"+x+"</div>").join("");
     }
 
-    setInterval(update,2000);
+    setInterval(load,2000);
     </script>
 
     </body>
@@ -152,7 +188,7 @@ def home():
 def data():
     return jsonify(state)
 
-
+# ================= START =================
 threading.Thread(target=run_bot, daemon=True).start()
 
-app.run(host="0.0.0.0", port=3000)
+app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
