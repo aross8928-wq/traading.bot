@@ -18,7 +18,7 @@ def log(msg):
 
 def get_klines(symbol, interval):
     try:
-        r=requests.get("https://api.binance.com/api/v3/klines",
+        r=requests.get("https://api.binance.us/api/v3/klines",
         params={"symbol":symbol,"interval":interval,"limit":200},timeout=10)
         df=pd.DataFrame(r.json())
         df=df[[1,2,3,4]]
