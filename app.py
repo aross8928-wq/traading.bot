@@ -3,6 +3,7 @@ import threading, time, requests, pandas as pd, os
 
 app = Flask(__name__)
 
+# ================= CONFIG =================
 SYMBOLS = [
     "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
     "XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT",
@@ -11,6 +12,7 @@ SYMBOLS = [
 
 state = {"coins":[],"logs":[]}
 
+# ================= UTILS =================
 def log(msg):
     print(msg)
     state["logs"].insert(0, msg)
@@ -27,6 +29,7 @@ def get_klines(symbol, interval):
     except:
         return None
 
+# ================= ANALYSIS =================
 def analyze(symbol):
 
     df1h=get_klines(symbol,"1h")
@@ -60,20 +63,17 @@ def analyze(symbol):
     zone="-"
 
     if trend_ok:
-
         score += 40
 
         if distance < 1.2:
             score += 30
-
             zone = round(row1["ema50"],2)
 
             if price > prev_high:
-
                 score += 30
 
                 signal="BUY"
-                reason="Breakout + good structure"
+                reason="Breakout + structure"
 
                 entry=round(price,2)
                 stop=round(price-atr,2)
@@ -81,9 +81,13 @@ def analyze(symbol):
 
                 order="OCO"
 
+            else:
+                signal="WAIT"
+                reason="Waiting breakout"
+
         else:
             signal="LATE"
-            reason="Too extended"
+            reason="Overextended"
             score -= 20
 
     else:
@@ -92,7 +96,6 @@ def analyze(symbol):
         score -= 50
 
     score = max(0, min(100, score))
-
     prob = round(score * 0.8,1)
 
     return {
@@ -110,6 +113,8 @@ def analyze(symbol):
         "zone":zone,
         "chart":df1h["close"].tail(50).tolist()
     }
+
+# ================= LOOP =================
 def run_bot():
     while True:
         coins=[]
@@ -121,6 +126,7 @@ def run_bot():
         log("Scan complete")
         time.sleep(15)
 
+# ================= WEB =================
 @app.route("/")
 def home():
     return """
@@ -131,8 +137,11 @@ def home():
     body { background:#111;color:#eee;font-family:Arial;padding:20px }
     table { width:100%; border-collapse:collapse }
     td,th { padding:8px; border-bottom:1px solid #333 }
-    .buy{color:#0f0} .wait{color:#ff0} .no{color:#f00}
-    canvas{max-width:400px}
+    .buy{color:#0f0;font-weight:bold}
+    .wait{color:#ff0}
+    .no{color:#f00}
+    .late{color:#ff8800}
+    canvas{max-width:300px}
     </style>
     </head>
     <body>
@@ -145,14 +154,13 @@ def home():
     <th>Coin</th><th>Price</th><th>Trend</th>
     <th>Signal</th><th>Reason</th>
     <th>Entry</th><th>SL</th><th>TP</th><th>Order</th>
+    <th>Score</th><th>Prob%</th><th>Re-entry</th>
     <th>Chart</th>
     </tr>
     </thead>
     <tbody id="table"></tbody>
     </table>
-    <th>Score</th>
-    <th>Prob%</th>
-    <th>Re-entry</th>
+
     <h3>Logs</h3>
     <div id="logs"></div>
 
@@ -162,15 +170,14 @@ def home():
         let html="";
 
         d.coins.forEach(c=>{
+
             let cls="wait";
             if(c.signal=="BUY")cls="buy";
             if(c.signal=="NO TRADE")cls="no";
+            if(c.signal=="LATE")cls="late";
 
             html+=`
             <tr>
-            <td>${c.score}</td>
-            <td>${c.prob}%</td>
-            <td>${c.zone}</td>
             <td>${c.symbol}</td>
             <td>${c.price}</td>
             <td>${c.trend}</td>
@@ -180,6 +187,9 @@ def home():
             <td>${c.stop}</td>
             <td>${c.tp}</td>
             <td>${c.order}</td>
+            <td>${c.score}</td>
+            <td>${c.prob}%</td>
+            <td>${c.zone}</td>
             <td><canvas id="${c.symbol}"></canvas></td>
             </tr>`;
         });
@@ -189,8 +199,10 @@ def home():
         d.coins.forEach(c=>{
             new Chart(document.getElementById(c.symbol),{
                 type:'line',
-                data:{labels:c.chart, datasets:[{data:c.chart, borderColor:'#0f0'}]},
-                options:{plugins:{legend:{display:false}},scales:{x:{display:false}}}
+                data:{labels:c.chart,
+                datasets:[{data:c.chart,borderColor:'#0f0'}]},
+                options:{plugins:{legend:{display:false}},
+                scales:{x:{display:false}}}
             });
         });
 
@@ -209,5 +221,6 @@ def home():
 def data():
     return jsonify(state)
 
+# ================= START =================
 threading.Thread(target=run_bot,daemon=True).start()
 app.run(host="0.0.0.0",port=int(os.environ.get("PORT",3000)))
