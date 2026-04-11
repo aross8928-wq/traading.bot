@@ -46,54 +46,70 @@ def analyze(symbol):
     row4=df4h.iloc[-1]
 
     price=row1["close"]
-    trend="BULL" if row4["ema50"]>row4["ema200"] else "BEAR"
+    atr=row1["atr"]
+
+    trend_ok = row4["ema50"] > row4["ema200"]
+    distance = (price - row1["ema50"]) / atr if atr > 0 else 0
 
     prev_high=df1h["high_roll"].iloc[-2]
 
     signal="WAIT"
-    reason="No breakout"
+    reason="No setup"
     entry="-"; stop="-"; tp="-"; order="-"
+    score=0
+    zone="-"
 
-    if trend=="BULL":
+    if trend_ok:
 
-        if (price-row1["ema50"])<row1["atr"]*1.2:
+        score += 40
 
-            if price>prev_high:
+        if distance < 1.2:
+            score += 30
+
+            zone = round(row1["ema50"],2)
+
+            if price > prev_high:
+
+                score += 30
 
                 signal="BUY"
-                reason="Breakout + trend aligned"
+                reason="Breakout + good structure"
 
                 entry=round(price,2)
-                stop=round(price-row1["atr"],2)
+                stop=round(price-atr,2)
                 tp=round(price+(price-stop)*2,2)
 
                 order="OCO"
 
-            else:
-                signal="WAIT"
-                reason="Waiting breakout"
-
         else:
             signal="LATE"
-            reason="Overextended move"
+            reason="Too extended"
+            score -= 20
 
     else:
         signal="NO TRADE"
         reason="Bear trend"
+        score -= 50
+
+    score = max(0, min(100, score))
+
+    prob = round(score * 0.8,1)
 
     return {
         "symbol":symbol,
         "price":round(price,2),
-        "trend":trend,
+        "trend":"BULL" if trend_ok else "BEAR",
         "signal":signal,
         "reason":reason,
         "entry":entry,
         "stop":stop,
         "tp":tp,
         "order":order,
+        "score":score,
+        "prob":prob,
+        "zone":zone,
         "chart":df1h["close"].tail(50).tolist()
     }
-
 def run_bot():
     while True:
         coins=[]
